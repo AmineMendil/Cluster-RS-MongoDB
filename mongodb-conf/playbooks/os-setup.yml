@@ -1,0 +1,43 @@
+- name: Préparation des serveurs MongoDB
+  hosts: mongodb
+  become: true
+
+  tasks:
+
+    - name: Mise à jour du système
+      apt:
+        update_cache: yes
+        upgrade: dist
+
+    - name: Installer paquets essentiels
+      apt:
+        name:
+          - curl
+          - gnupg
+          - ca-certificates
+          - apt-transport-https
+        state: present
+
+    - name: Installer Python + dépendances Ansible
+      apt:
+        name:
+          - python3
+          - python3-pip
+          - python3-requests
+          - python3-urllib3
+        state: present
+
+    # --------------------------------------------------
+    # 🧠 AJOUT : hostname par machine
+    # --------------------------------------------------
+
+    - name: Définir hostname selon inventaire
+      hostname:
+        name: "{{ inventory_hostname }}"
+
+    - name: Mise à jour /etc/hosts pour MongoDB cluster
+      lineinfile:
+        path: /etc/hosts
+        line: "{{ hostvars[item].ansible_host | default(item) }} {{ item }}"
+        state: present
+      loop: "{{ groups['mongodb'] }}"

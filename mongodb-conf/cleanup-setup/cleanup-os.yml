@@ -1,0 +1,39 @@
+- name: Suppression préparation des serveurs MongoDB
+  hosts: mongodb
+  become: true
+
+  tasks:
+
+    # Supprime les paquets installés
+    - name: Désinstaller paquets essentiels
+      apt:
+        name:
+          - curl
+          - gnupg
+          - ca-certificates
+          - apt-transport-https
+        state: absent
+        autoremove: yes
+
+    # Supprime Python et dépendances Ansible
+    - name: Désinstaller Python + dépendances
+      apt:
+        name:
+          - python3-pip
+          - python3-requests
+          - python3-urllib3
+        state: absent
+        autoremove: yes
+
+    # Remet le hostname par défaut
+    - name: Remettre hostname par défaut
+      hostname:
+        name: localhost
+
+    # Supprime les entrées MongoDB dans /etc/hosts
+    - name: Supprimer entrées MongoDB du fichier hosts
+      lineinfile:
+        path: /etc/hosts
+        line: "{{ hostvars[item].ansible_host | default(item) }} {{ item }}"
+        state: absent
+      loop: "{{ groups['mongodb'] }}"

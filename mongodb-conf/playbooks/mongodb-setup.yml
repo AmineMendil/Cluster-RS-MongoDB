@@ -1,0 +1,163 @@
+---
+# =============================================================
+# PLAYBOOK 3 : MongoDB Replica Set Deployment
+# =============================================================
+- name: MongoDB Replica Set Deployment
+  hosts: mongodb
+  become: true
+  vars:
+    mongo_container: mongo
+    mongo_image: mongo:6
+    mongo_port: 27017
+    keyfile_src: ../files/mongo-keyfile    # ← CORRIGÉ
+    keyfile_dest: /opt/mongo-keyfile/keyfile
+    data_dir: /opt/mongo-data
+
+  tasks:
+
+    # =========================
+    # KEYFILE
+    # =========================
+    - name: Créer dossier keyfile
+      file:
+        path: /opt/mongo-keyfile
+        state: directory
+        mode: "0700"
+        owner: "999"
+        group: "999"
+
+    - name: Copier keyfile MongoDB
+      copy:
+        src: "{{ keyfile_src }}"
+        dest: "{{ keyfile_dest }}"
+        mode: "0400"
+        owner: "999"
+        group: "999"
+
+    # =========================
+    # DATA DIRECTORY
+    # =========================
+    - name: Créer dossier data MongoDB
+      file:
+        path: "{{ data_dir }}"
+        state: directory
+        mode: "0755"
+        owner: "999"
+        group: "999"
+
+    # =========================
+    # CLEAN CONTAINER
+    # =========================
+    - name: Supprimer ancien container MongoDB
+      docker_container:
+        name: "{{ mongo_container }}"
+        state: absent
+      ignore_errors: true
+
+    # =========================
+    # START MONGO
+    # =========================
+    - name: Démarrer MongoDB
+      docker_container:
+        name: "{{ mongo_container }}"
+        image: "{{ mongo_image }}"
+        state: started
+        restart_policy: always
+        ports:
+          - "{{ mongo_port }}:27017"
+        volumes:
+          - "{{ data_dir }}:/data/db"
+          - "{{ keyfile_dest }}:/etc/mongo-keyfile:ro"
+        command: >
+          --replSet rs0
+          --keyFile /etc/mongo-keyfile
+          --bind_ip_all
+
+    # =========================
+    # WAIT STARTUP
+    # =========================
+    - name: Attendre MongoDB prêt
+      wait_for:
+        host: 127.0.0.1
+        port: 27017
+        timeout: 60
+
+# =============================================================
+# INIT REPLICA SET — uniquement sur mongo1
+# =============================================================
+- name: Initialize Replica Set
+  hosts: mongodb[0]
+  become: true
+  vars:
+    mongo_container: mongo
+  tasks:
+
+    - name: Attendre que les 3 noeuds soient joignables sur 27017
+      wait_for:
+        host: "{{ item }}"
+        port: 27017
+        timeout: 120
+      loop:
+        - "{{ hostvars['mongo1']['ansible_host'] }}"
+        - "{{ hostvars['mongo2']['ansible_host'] }}"
+        - "{{ hostvars['mongo3']['ansible_host'] }}"
+
+    - name: Init replica set si non existant
+      shell: |
+        docker exec {{ mongo_container }} mongosh --quiet --eval '
+        try {
+          var s = rs.status();
+          print("Already initialized: " + s.set);
+        } catch (e) {
+          var result = rs.initiate({
+            _id: "rs0",
+            members: [
+              { _id: 0, host: "{{ hostvars['mongo1']['ansible_host'] }}:27017" },
+              { _id: 1, host: "{{ hostvars['mongo2']['ansible_host'] }}:27017" },
+              { _id: 2, host: "{{ hostvars['mongo3']['ansible_host'] }}:27017" }
+            ]
+          });
+          print(JSON.stringify(result));
+        }'
+      register: rs_init
+
+    - name: Afficher résultat init
+      debug:
+        var: rs_init.stdout
+
+    # =========================
+    # WAIT PRIMARY
+    # =========================
+    - name: Attendre que mongo1 soit PRIMARY
+      shell: |
+        docker exec {{ mongo_container }} mongosh --quiet --eval 'rs.isMaster().ismaster'
+      register: primary
+      retries: 20
+      delay: 5
+      until: "'true' in primary.stdout"
+
+    - name: Confirmer PRIMARY
+      debug:
+        msg: "mongo1 est bien PRIMARY — Replica Set opérationnel"
+
+# =============================================================
+# VÉRIFICATION FINALE — sur tous les noeuds
+# =============================================================
+- name: Vérification cluster MongoDB
+  hosts: mongodb
+  become: true
+  vars:
+    mongo_container: mongo
+  tasks:
+
+    - name: Vérifier rs.status() sur chaque noeud
+      shell: |
+        docker exec {{ mongo_container }} mongosh --quiet --eval '
+        var s = rs.status();
+        print("Node: " + s.myState + " | Set: " + s.set);'
+      register: rs_status
+      ignore_errors: true
+
+    - name: Afficher statut de chaque noeud
+      debug:
+        var: rs_status.stdout

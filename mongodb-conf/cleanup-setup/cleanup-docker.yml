@@ -1,0 +1,57 @@
+- name: Suppression Docker et dépendances
+  hosts: mongodb
+  become: true
+
+  tasks:
+
+    # Arrête Docker
+    - name: Arrêter Docker
+      service:
+        name: docker
+        state: stopped
+        enabled: false
+
+    # Arrête containerd
+    - name: Arrêter containerd
+      service:
+        name: containerd
+        state: stopped
+        enabled: false
+
+    # Désinstalle Docker et containerd
+    - name: Désinstaller Docker
+      apt:
+        name:
+          - docker.io
+          - containerd
+        state: absent
+        autoremove: yes
+        purge: yes
+
+    # Supprime module Python Docker
+    - name: Désinstaller module Python Docker
+      apt:
+        name: python3-docker
+        state: absent
+        autoremove: yes
+
+    # Supprime dépendances système
+    - name: Désinstaller dépendances système
+      apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+        state: absent
+        autoremove: yes
+
+    # Supprime données Docker restantes
+    - name: Supprimer dossiers Docker
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /var/lib/docker
+        - /var/lib/containerd
+        - /etc/docker
